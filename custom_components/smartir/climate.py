@@ -418,7 +418,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         if not hvac_mode == HVACMode.OFF:
             self._last_on_operation = hvac_mode
 
-        await self.send_command()
+        if self._generate:
+            await self.generate_and_send_command()
+        else:
+            await self.send_command()
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode):
@@ -426,7 +429,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._current_fan_mode = fan_mode
         
         if not self._hvac_mode.lower() == HVACMode.OFF:
-            await self.send_command()      
+            if self._generate:
+                await self.generate_and_send_command()
+            else:
+                await self.send_command()
         self.async_write_ha_state()
 
     async def async_set_swing_mode(self, swing_mode):
@@ -434,7 +440,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._current_swing_mode = swing_mode
 
         if not self._hvac_mode.lower() == HVACMode.OFF:
-            await self.send_command()
+            if self._generate:
+                await self.generate_and_send_command()
+            else:
+                await self.send_command()
         self.async_write_ha_state()
 
     async def async_turn_off(self):
