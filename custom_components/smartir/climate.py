@@ -48,7 +48,7 @@ SUPPORT_FLAGS = (
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_UNIQUE_ID): cv.string,
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-    vol.Optional(CONF_DEVICE_CODE): cv.positive_int,
+    vol.Optional(CONF_DEVICE_CODE): cv.string,
     vol.Required(CONF_CONTROLLER_DATA): cv.string,
     vol.Optional(CONF_DELAY, default=DEFAULT_DELAY): cv.positive_float,
     vol.Optional(CONF_TEMPERATURE_SENSOR): cv.entity_id,
@@ -69,7 +69,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     if not os.path.isdir(device_files_absdir):
         os.makedirs(device_files_absdir)
 
-    device_json_filename = str(device_code) + '.json'
+    device_json_filename = device_code + '.json'
     device_json_path = os.path.join(device_files_absdir, device_json_filename)
 
     if not os.path.exists(device_json_path):
