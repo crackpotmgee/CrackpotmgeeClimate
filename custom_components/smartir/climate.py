@@ -33,7 +33,7 @@ CONF_HUMIDITY_SENSOR = 'humidity_sensor'
 CONF_POWER_SENSOR = 'power_sensor'
 CONF_POWER_SENSOR_RESTORE_STATE = 'power_sensor_restore_state'
 CONF_TEMPERATURE_UNIT = 'temperature_unit'
-CONF_DEVICE_MODEL = 'device_model'
+CONF_GEN_DEVICE_MODEL = 'device_model'
 
 SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
@@ -56,7 +56,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_POWER_SENSOR): cv.entity_id,
     vol.Optional(CONF_POWER_SENSOR_RESTORE_STATE, default=False): cv.boolean,
     vol.Optional(CONF_TEMPERATURE_UNIT, default='C'): vol.In(['C', 'F']),
-    vol.Optional(CONF_DEVICE_MODEL): cv.string
+    vol.Optional(CONF_GEN_DEVICE_MODEL): cv.string
 })
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
@@ -134,6 +134,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._commands = device_data['commands']
         self._generate = device_data.get('commands', {}).get('generateWith') != None
         self._generate_with = device_data.get('commands', {}).get('generateWith')
+        self._generate_device_model = config.get(CONF_GEN_DEVICE_MODEL) or self._supported_models[0]
 
         self._target_temperature = self._to_celsius(72)  # Default target temp
         self._hvac_mode = HVACMode.OFF
@@ -440,7 +441,6 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         async with self._temp_lock:
             try:
                 self._on_by_remote = False
-                operation_mode = self._hvac_mode
                 fan_mode = self._current_fan_mode
                 swing_mode = self._current_swing_mode
                 target_temperature = '{0:g}'.format(self._target_temperature)
@@ -448,7 +448,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                 if self._generate_with == "pyhvac":
                     from .generate_daikin_pyhvac import try_pyhvac_generate
                     generated_command = await try_pyhvac_generate(
-                        model=self._supported_models[0],
+                        model=self.generate_device_model,
                         mode=self._hvac_mode,
                         temp=self._target_temperature,
                         fan=self._current_fan_mode,
