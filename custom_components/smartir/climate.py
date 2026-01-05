@@ -33,7 +33,7 @@ CONF_HUMIDITY_SENSOR = 'humidity_sensor'
 CONF_POWER_SENSOR = 'power_sensor'
 CONF_POWER_SENSOR_RESTORE_STATE = 'power_sensor_restore_state'
 CONF_TEMPERATURE_UNIT = 'temperature_unit'
-CONF_GEN_DEVICE_MODEL = 'device_model'
+CONF_GEN_DEVICE_MODEL = 'gen_device_model'
 
 SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
