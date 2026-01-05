@@ -33,26 +33,30 @@ CONF_HUMIDITY_SENSOR = 'humidity_sensor'
 CONF_POWER_SENSOR = 'power_sensor'
 CONF_POWER_SENSOR_RESTORE_STATE = 'power_sensor_restore_state'
 CONF_TEMPERATURE_UNIT = 'temperature_unit'
+CONF_DEVICE_MODEL = 'device_model'
 
 SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
     ClimateEntityFeature.TURN_ON |
     ClimateEntityFeature.TARGET_TEMPERATURE | 
-    ClimateEntityFeature.FAN_MODE
+    ClimateEntityFeature.FAN_MODE | 
+    ClimateEntityFeature.SWING_MODE |
+    ClimateEntityFeature.SWING_HORIZONTAL_MODE |
+    ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
 )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_UNIQUE_ID): cv.string,
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-    vol.Required(CONF_DEVICE_CODE): cv.positive_int,
+    vol.Optional(CONF_DEVICE_CODE): cv.positive_int,
     vol.Required(CONF_CONTROLLER_DATA): cv.string,
     vol.Optional(CONF_DELAY, default=DEFAULT_DELAY): cv.positive_float,
     vol.Optional(CONF_TEMPERATURE_SENSOR): cv.entity_id,
     vol.Optional(CONF_HUMIDITY_SENSOR): cv.entity_id,
     vol.Optional(CONF_POWER_SENSOR): cv.entity_id,
-    vol.Optional(CONF_POWER_SENSOR_RESTORE_STATE, default=False): cv.boolean
-    ,
-    vol.Optional(CONF_TEMPERATURE_UNIT, default='C'): vol.In(['C', 'F'])
+    vol.Optional(CONF_POWER_SENSOR_RESTORE_STATE, default=False): cv.boolean,
+    vol.Optional(CONF_TEMPERATURE_UNIT, default='C'): vol.In(['C', 'F']),
+    vol.Optional(CONF_DEVICE_MODEL): cv.string
 })
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
@@ -119,6 +123,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._commands_encoding = device_data['commandsEncoding']
         self._min_temperature = device_data['minTemperature']
         self._max_temperature = device_data['maxTemperature']
+        self._mode_temperature_map = [x for x in device_data['modeTemperatureMap']]
         self._precision = device_data['precision']
 
         valid_hvac_modes = [x for x in device_data['operationModes'] if x in HVAC_MODES]
@@ -127,8 +132,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._fan_modes = device_data['fanModes']
         self._swing_modes = device_data.get('swingModes')
         self._commands = device_data['commands']
+        self._generate = device_data.get('commands', {}).get('generateWith') != None
+        self._generate_with = device_data.get('commands', {}).get('generateWith')
 
-        self._target_temperature = self._min_temperature
+        self._target_temperature = self._to_celsius(72)  # Default target temp
         self._hvac_mode = HVACMode.OFF
         self._current_fan_mode = self._fan_modes[0]
         self._current_swing_mode = None
@@ -268,11 +275,17 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def min_temp(self):
         """Return the polling state."""
+        if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
+            mode_map = self._mode_temperature_map[self._hvac_mode]
+            return self._from_celsius(mode_map['min'], self._configured_unit)
         return self._from_celsius(self._min_temperature, self._configured_unit)
         
     @property
     def max_temp(self):
         """Return the polling state."""
+        if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
+            mode_map = self._mode_temperature_map[self._hvac_mode]
+            return self._from_celsius(mode_map['max'], self._configured_unit)
         return self._from_celsius(self._max_temperature, self._configured_unit)
 
     @property
@@ -379,7 +392,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             return
         
         if not self._hvac_mode.lower() == HVACMode.OFF:
-            await self.send_command()
+            if self._generate:
+                await self.generate_and_send_command()
+            else:
+                await self.send_command()
 
         self.async_write_ha_state()
 
@@ -420,6 +436,29 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         else:
             await self.async_set_hvac_mode(self._operation_modes[1])
 
+    async def generate_and_send_command(self):
+        async with self._temp_lock:
+            try:
+                self._on_by_remote = False
+                operation_mode = self._hvac_mode
+                fan_mode = self._current_fan_mode
+                swing_mode = self._current_swing_mode
+                target_temperature = '{0:g}'.format(self._target_temperature)
+                _LOGGER.debug("Generating command with {}".format(self._generate_with))
+                if self._generate_with == "pyhvac":
+                    from .generate_daikin_pyhvac import try_pyhvac_generate
+                    generated_command = await try_pyhvac_generate(
+                        model=self._supported_models[0],
+                        mode=self._hvac_mode,
+                        temp=self._target_temperature,
+                        fan=self._current_fan_mode,
+                        #swing=self._current_swing_mode, # update later
+                        #hswing=None,
+                        powerful=None
+                    )
+                    await self._controller.send(generated_command)
+            except Exception as e:
+                _LOGGER.exception(e)
     async def send_command(self):
         async with self._temp_lock:
             try:
