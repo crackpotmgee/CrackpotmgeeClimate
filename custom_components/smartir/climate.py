@@ -71,7 +71,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     device_json_path = os.path.join(device_files_absdir, device_json_filename)
 
     if not os.path.exists(device_json_path):
-        _LOGGER.warning("Couldn't find the device Json file. The component will " \
+        _LOGGER.warning(f"Couldn't find the device Json file at {device_json_path}. The component will " \
                         "try to download it from the GitHub repo.")
 
         try:
