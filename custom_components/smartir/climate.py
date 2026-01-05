@@ -40,9 +40,7 @@ SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_ON |
     ClimateEntityFeature.TARGET_TEMPERATURE | 
     ClimateEntityFeature.FAN_MODE | 
-    ClimateEntityFeature.SWING_MODE |
-    ClimateEntityFeature.SWING_HORIZONTAL_MODE |
-    ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+    ClimateEntityFeature.SWING_MODE
 )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
