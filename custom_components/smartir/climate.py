@@ -192,12 +192,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._hvac_mode = last_state.state
             self._current_fan_mode = last_state.attributes['fan_mode']
             self._current_swing_mode = last_state.attributes.get('swing_mode')
-            # Restored temperature is expected to be in the unit that was previously
-            # reported by this entity. Convert it back to internal Celsius storage.
             restored_temp = last_state.attributes.get('temperature')
             restored_unit = last_state.attributes.get('unit_of_measurement')
             if restored_temp is not None:
-                self._target_temperature = self._to_celsius(restored_temp, unit=restored_unit)
+                self._target_temperature = restored_temp
 
             if 'last_on_operation' in last_state.attributes:
                 self._last_on_operation = last_state.attributes['last_on_operation']
