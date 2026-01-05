@@ -1,0 +1,68 @@
+{
+  "version": 2,
+  "manufacturer": "Daikin",
+  "supportedModels": [
+    "ARC452A21",
+    "FTXS09LVJU",
+    "FTXS12LVJU",
+    "FTXS15LVJU",
+    "FTXS18LVJU",
+    "FTXS24LVJU"
+  ],
+  "supportedController": "Broadlink",
+  "commands": {
+    "generateWith": "pyhvac"
+  },
+  "commandsEncoding": "Base64",
+  "precision": 1.0,
+  "temperatureUnit": "C",
+  "operationModes": [
+    "cool",
+    "heat",
+    "auto",
+    "dry",
+    "fan"
+  ],
+  "fanModes": [
+    "auto",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ],
+  "swingModes":[
+      "auto",
+      "Top",
+      "High",
+      "Medium",
+      "Low",
+      "Bottom"
+   ],
+  "powerfulModes": [
+    "off",
+    "on"
+  ],
+  "modeTemperatureMap": {
+    "cool": {
+      "min": 20.0,
+      "max": 26.0
+    },
+    "heat": {
+      "min": 20.0,
+      "max": 26.0
+    },
+    "auto": {
+      "min": 20.0,
+      "max": 26.0
+    },
+    "dry": {
+      "min": 24.0,
+      "max": 26.0
+    },
+    "fan": {
+      "min": 24.0,
+      "max": 26.0
+    }
+  }
+}
