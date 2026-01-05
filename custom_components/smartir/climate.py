@@ -275,11 +275,17 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def min_temp(self):
         """Return the polling state."""
+        if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
+            mode_map = self._mode_temperature_map[self._hvac_mode]
+            return self._from_celsius(mode_map['min'], self._configured_unit)
         return self._from_celsius(self._min_temperature, self._configured_unit)
         
     @property
     def max_temp(self):
         """Return the polling state."""
+        if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
+            mode_map = self._mode_temperature_map[self._hvac_mode]
+            return self._from_celsius(mode_map['max'], self._configured_unit)
         return self._from_celsius(self._max_temperature, self._configured_unit)
 
     @property
