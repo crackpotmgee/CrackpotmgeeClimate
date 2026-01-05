@@ -119,11 +119,22 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._supported_models = device_data['supportedModels']
         self._supported_controller = device_data['supportedController']
         self._commands_encoding = device_data['commandsEncoding']
-        self._min_temperature = device_data['minTemperature']
-        self._max_temperature = device_data['maxTemperature']
         # `modeTemperatureMap` is optional in device JSON. Use an empty dict
         # when it's not present so later lookups are safe.
         self._mode_temperature_map = device_data.get('modeTemperatureMap') or {}
+        
+        # Initialize min/max temperature, with fallback to 'off' mode if not provided
+        min_temp = device_data.get('minTemperature')
+        max_temp = device_data.get('maxTemperature')
+        
+        if not min_temp and 'off' in self._mode_temperature_map:
+            min_temp = self._mode_temperature_map['off'].get('min')
+        self._min_temperature = min_temp
+        
+        if not max_temp and 'off' in self._mode_temperature_map:
+            max_temp = self._mode_temperature_map['off'].get('max')
+        self._max_temperature = max_temp
+        
         self._precision = device_data['precision']
 
         valid_hvac_modes = [x for x in device_data['operationModes'] if x in HVAC_MODES]
