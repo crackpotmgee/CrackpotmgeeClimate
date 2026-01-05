@@ -147,7 +147,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._generate_with = device_data.get('commands', {}).get('generateWith')
         self._generate_device_model = config.get(CONF_GEN_DEVICE_MODEL) or self._supported_models[0]
 
-        self._target_temperature = self._to_celsius(72)  # Default target temp
+        self._target_temperature = 72  # Default target temp
         self._hvac_mode = HVACMode.OFF
         self._current_fan_mode = self._fan_modes[0]
         self._current_swing_mode = None
@@ -181,46 +181,6 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._controller_data,
             self._delay)
 
-    def _to_celsius(self, value, unit=None):
-        """Convert a temperature value to Celsius.
-
-        If unit is not provided, assume Home Assistant default units.
-        """
-        if value is None:
-            return None
-        try:
-            v = float(value)
-        except (TypeError, ValueError):
-            return None
-
-        if unit is None:
-            unit = self.hass.config.units.temperature_unit
-
-        unit = str(unit).upper()
-        if unit in ('F', '°F', 'FAHRENHEIT'):
-            return (v - 32.0) * 5.0 / 9.0
-        return v
-
-    def _from_celsius(self, value, unit=None):
-        """Convert a Celsius temperature to the requested unit.
-
-        If unit is not provided, use the configured unit for this entity.
-        """
-        if value is None:
-            return None
-        try:
-            v = float(value)
-        except (TypeError, ValueError):
-            return None
-
-        if unit is None:
-            unit = self._configured_unit
-
-        unit = str(unit).upper()
-        if unit in ('F', '°F', 'FAHRENHEIT'):
-            return v * 9.0 / 5.0 + 32.0
-        return v
-            
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
@@ -289,27 +249,27 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         """Return the polling state."""
         if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
             mode_map = self._mode_temperature_map[self._hvac_mode]
-            return self._from_celsius(mode_map['min'], self._configured_unit)
-        return self._from_celsius(self._min_temperature, self._configured_unit)
+            return mode_map['min']
+        return self._min_temperature
         
     @property
     def max_temp(self):
         """Return the polling state."""
         if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
             mode_map = self._mode_temperature_map[self._hvac_mode]
-            return self._from_celsius(mode_map['max'], self._configured_unit)
-        return self._from_celsius(self._max_temperature, self._configured_unit)
+            return mode_map['max']
+        return self._max_temperature
 
     @property
     def target_temperature(self):
         """Return the temperature we try to reach."""
-        return self._from_celsius(self._target_temperature, self._configured_unit)
+        return self._target_temperature
 
     @property
     def target_temperature_step(self):
         """Return the supported step of target temperature."""
         # Return step in configured unit
-        return self._from_celsius(self._precision, self._configured_unit)
+        return self._precision
 
     @property
     def hvac_modes(self):
@@ -349,7 +309,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def current_temperature(self):
         """Return the current temperature."""
-        return self._from_celsius(self._current_temperature, self._configured_unit)
+        return self._current_temperature
 
     @property
     def current_humidity(self):
@@ -380,15 +340,12 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
           
         if temperature is None:
             return
-        # Convert incoming temperature (which is in the configured unit) to Celsius
-        if self._configured_unit == 'F':
-            temperature_c = self._to_celsius(temperature, unit='F')
-        else:
-            try:
-                temperature_c = float(temperature)
-            except (TypeError, ValueError):
-                _LOGGER.error('Invalid temperature value: %s', temperature)
-                return
+        # Convert incoming temperature to float
+        try:
+            temperature_c = float(temperature)
+        except (TypeError, ValueError):
+            _LOGGER.error('Invalid temperature value: %s', temperature)
+            return
 
         if temperature_c < self._min_temperature or temperature_c > self._max_temperature:
             _LOGGER.warning('The temperature value is out of min/max range') 
@@ -560,10 +517,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         """Update thermostat with latest state from temperature sensor."""
         try:
             if state.state != STATE_UNKNOWN and state.state != STATE_UNAVAILABLE:
-                # Convert sensor reading to internal Celsius storage. Sensor may report
-                # unit in `unit_of_measurement` attribute; fall back to HA default.
-                sensor_unit = state.attributes.get('unit_of_measurement') if hasattr(state, 'attributes') else None
-                self._current_temperature = self._to_celsius(state.state, unit=sensor_unit)
+                self._current_temperature = float(state.state)
         except ValueError as ex:
             _LOGGER.error("Unable to update from temperature sensor: %s", ex)
 
