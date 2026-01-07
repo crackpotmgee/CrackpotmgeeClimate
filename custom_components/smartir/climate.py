@@ -32,7 +32,6 @@ CONF_TEMPERATURE_SENSOR = 'temperature_sensor'
 CONF_HUMIDITY_SENSOR = 'humidity_sensor'
 CONF_POWER_SENSOR = 'power_sensor'
 CONF_POWER_SENSOR_RESTORE_STATE = 'power_sensor_restore_state'
-CONF_TEMPERATURE_UNIT = 'temperature_unit'
 CONF_GEN_DEVICE_MODEL = 'gen_device_model'
 
 SUPPORT_FLAGS = (
@@ -53,7 +52,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_HUMIDITY_SENSOR): cv.entity_id,
     vol.Optional(CONF_POWER_SENSOR): cv.entity_id,
     vol.Optional(CONF_POWER_SENSOR_RESTORE_STATE, default=False): cv.boolean,
-    vol.Optional(CONF_TEMPERATURE_UNIT, default='C'): vol.In(['C', 'F']),
     vol.Optional(CONF_GEN_DEVICE_MODEL): cv.string
 })
 
@@ -129,11 +127,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         
         if not min_temp and 'off' in self._mode_temperature_map:
             min_temp = self._mode_temperature_map['off'].get('min')
-        self._min_temperature = min_temp
+        self._min_temp = min_temp
         
         if not max_temp and 'off' in self._mode_temperature_map:
             max_temp = self._mode_temperature_map['off'].get('max')
-        self._max_temperature = max_temp
+        self._max_temp = max_temp
         
         self._precision = device_data['precision']
 
@@ -147,7 +145,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._generate_with = device_data.get('commands', {}).get('generateWith')
         self._generate_device_model = config.get(CONF_GEN_DEVICE_MODEL) or self._supported_models[0]
 
-        self._target_temperature = 72  # Default target temp
+        self._target_temperature = 21  # Default target temp
         self._hvac_mode = HVACMode.OFF
         self._current_fan_mode = self._fan_modes[0]
         self._current_swing_mode = None
@@ -155,11 +153,6 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
 
         self._current_temperature = None
         self._current_humidity = None
-
-        # Configured temperature unit for this entity (C or F). Default C.
-        self._configured_unit = (config.get(CONF_TEMPERATURE_UNIT) or 'C').upper()
-        # Unit string presented to Home Assistant (use degree symbol to match common units)
-        self._unit = '°F' if self._configured_unit == 'F' else '°C'
         
         #Supported features
         self._support_flags = SUPPORT_FLAGS
@@ -193,7 +186,8 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._current_fan_mode = last_state.attributes['fan_mode']
             self._current_swing_mode = last_state.attributes.get('swing_mode')
             restored_temp = last_state.attributes.get('temperature')
-            restored_unit = last_state.attributes.get('unit_of_measurement')
+            #restored_unit = last_state.attributes.get('unit_of_measurement')
+            restored_unit = self._unit
             if restored_temp is not None:
                 self._target_temperature = restored_temp
 
@@ -240,7 +234,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def temperature_unit(self):
         """Return the unit of measurement."""
-        return self._unit
+        return "°C"
 
     @property
     def min_temp(self):
@@ -248,7 +242,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
             mode_map = self._mode_temperature_map[self._hvac_mode]
             return mode_map['min']
-        return self._min_temperature
+        return self._min_temp
         
     @property
     def max_temp(self):
@@ -256,7 +250,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
             mode_map = self._mode_temperature_map[self._hvac_mode]
             return mode_map['max']
-        return self._max_temperature
+        return self._max_temp
 
     @property
     def target_temperature(self):
@@ -372,6 +366,9 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         
         if not hvac_mode == HVACMode.OFF:
             self._last_on_operation = hvac_mode
+
+        self._min_temp = self.min_temp
+        self._max_temp = self.max_temp
 
         if self._generate:
             await self.generate_and_send_command()
