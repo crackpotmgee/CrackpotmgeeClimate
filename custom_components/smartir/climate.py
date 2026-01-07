@@ -180,7 +180,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._commands_encoding,
             self._controller_data,
             self._delay)
-
+    
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
@@ -345,7 +345,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             _LOGGER.error('Invalid temperature value: %s', temperature)
             return
 
-        if temperature_c < self._min_temperature or temperature_c > self._max_temperature:
+        if temperature_c < self.min_temp or temperature_c > self.max_temp:
             _LOGGER.warning('The temperature value is out of min/max range') 
             return
 
