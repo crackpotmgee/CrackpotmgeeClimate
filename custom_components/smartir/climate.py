@@ -512,7 +512,13 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         """Update thermostat with latest state from temperature sensor."""
         try:
             if state.state != STATE_UNKNOWN and state.state != STATE_UNAVAILABLE:
-                self._current_temperature = float(state.state)
+                temp = float(state.state)
+                # Check sensor's unit of measurement and convert to Celsius if needed
+                sensor_unit = state.attributes.get('unit_of_measurement', '°C')
+                if '°F' in sensor_unit or sensor_unit == 'F':
+                    # Convert Fahrenheit to Celsius
+                    temp = (temp - 32) * 5 / 9
+                self._current_temperature = temp
         except ValueError as ex:
             _LOGGER.error("Unable to update from temperature sensor: %s", ex)
 
