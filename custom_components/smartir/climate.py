@@ -427,8 +427,8 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                         mode=self._hvac_mode,
                         temp=self._target_temperature,
                         fan=self._current_fan_mode,
-                        #swing=self._current_swing_mode, # update later
-                        #hswing=None,
+                        swing=None, # update later
+                        hswing=None,
                         powerful=None
                     )
                     await self._controller.send(generated_command)
