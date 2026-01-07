@@ -422,7 +422,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                 _LOGGER.debug("Generating command with {}".format(self._generate_with))
                 if self._generate_with == "pyhvac":
                     from .generate_daikin_pyhvac import try_pyhvac_generate
-                    generated_command = await try_pyhvac_generate(
+                    generated_command = try_pyhvac_generate(
                         model=self._generate_device_model,
                         mode=self._hvac_mode,
                         temp=self._target_temperature,
