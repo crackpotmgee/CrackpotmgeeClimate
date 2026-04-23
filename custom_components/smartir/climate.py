@@ -186,10 +186,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._current_fan_mode = last_state.attributes['fan_mode']
             self._current_swing_mode = last_state.attributes.get('swing_mode')
             restored_temp = last_state.attributes.get('temperature')
-            restored_unit = last_state.attributes.get('unit_of_measurement')
-            
+            restored_unit = last_state.attributes.get('unit_of_measurement', '°C')
+        
             if restored_temp is not None:
-                if '°F' in restored_unit or restored_unit == 'F':
+                if '°C' in restored_unit or restored_unit == 'C' and restored_temp > 45:
                     restored_temp = convert_to_celsius(restored_temp)
                 self._target_temperature = restored_temp
 
