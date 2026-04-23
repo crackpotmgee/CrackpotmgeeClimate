@@ -127,10 +127,14 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         
         if not min_temp and 'off' in self._mode_temperature_map:
             min_temp = self._mode_temperature_map['off'].get('min')
+            if '°F' in self.unit_of_measurement or self.unit_of_measurement == 'F':
+                min_temp = convert_to_fahrenheit(min_temp)
         self._min_temp = min_temp
         
         if not max_temp and 'off' in self._mode_temperature_map:
             max_temp = self._mode_temperature_map['off'].get('max')
+            if '°F' in self.unit_of_measurement or self.unit_of_measurement == 'F':
+                max_temp = convert_to_fahrenheit(max_temp)
         self._max_temp = max_temp
         
         self._precision = device_data['precision']
@@ -517,7 +521,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                 sensor_unit = state.attributes.get('unit_of_measurement', '°C')
                 if '°F' in sensor_unit or sensor_unit == 'F':
                     # Convert Fahrenheit to Celsius
-                    temp = (temp - 32) * 5 / 9
+                    temp = convert_to_celsius(temp)
                 self._current_temperature = temp
         except ValueError as ex:
             _LOGGER.error("Unable to update from temperature sensor: %s", ex)
@@ -530,3 +534,9 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                 self._current_humidity = float(state.state)
         except ValueError as ex:
             _LOGGER.error("Unable to update from humidity sensor: %s", ex)
+
+def convert_to_celsius(temp):
+    return (temp - 32) * 5 / 9
+
+def convert_to_fahrenheit(temp):
+    return (temp * 9 / 5) + 32
