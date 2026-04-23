@@ -127,14 +127,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         
         if not min_temp and 'off' in self._mode_temperature_map:
             min_temp = self._mode_temperature_map['off'].get('min')
-            if '°F' in self.unit_of_measurement or self.unit_of_measurement == 'F':
-                min_temp = convert_to_fahrenheit(min_temp)
         self._min_temp = min_temp
         
         if not max_temp and 'off' in self._mode_temperature_map:
             max_temp = self._mode_temperature_map['off'].get('max')
-            if '°F' in self.unit_of_measurement or self.unit_of_measurement == 'F':
-                max_temp = convert_to_fahrenheit(max_temp)
         self._max_temp = max_temp
         
         self._precision = device_data['precision']
@@ -193,6 +189,8 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             restored_unit = last_state.attributes.get('unit_of_measurement')
             
             if restored_temp is not None:
+                if '°F' in self.unit_of_measurement or self.unit_of_measurement == 'F':
+                    restored_temp = convert_to_celsius(restored_temp)
                 self._target_temperature = restored_temp
 
             if 'last_on_operation' in last_state.attributes:
