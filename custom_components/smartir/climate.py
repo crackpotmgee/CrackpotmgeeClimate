@@ -189,7 +189,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             restored_unit = last_state.attributes.get('unit_of_measurement')
             
             if restored_temp is not None:
-                if '°F' in self.unit_of_measurement or self.unit_of_measurement == 'F':
+                if '°F' in restored_unit or restored_unit == 'F':
                     restored_temp = convert_to_celsius(restored_temp)
                 self._target_temperature = restored_temp
 
