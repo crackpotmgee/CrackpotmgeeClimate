@@ -140,6 +140,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._operation_modes = [HVACMode.OFF] + valid_hvac_modes
         self._fan_modes = device_data['fanModes']
         self._swing_modes = device_data.get('swingModes')
+        self._horizontal_swing_modes = (
+            device_data.get('horizontalSwingModes')
+            if device_data.get('commands', {}).get('generateWith') == 'pyhvac'
+            else None
+        )
         self._commands = device_data['commands']
         self._generate = device_data.get('commands', {}).get('generateWith') != None
         self._generate_with = device_data.get('commands', {}).get('generateWith')
@@ -149,6 +154,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._hvac_mode = HVACMode.OFF
         self._current_fan_mode = self._fan_modes[0]
         self._current_swing_mode = None
+        self._current_horizontal_swing_mode = None
         self._last_on_operation = None
 
         self._current_temperature = None
@@ -162,6 +168,12 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._support_flags = self._support_flags | ClimateEntityFeature.SWING_MODE
             self._current_swing_mode = self._swing_modes[0]
             self._support_swing = True
+
+        if self._horizontal_swing_modes:
+            self._support_flags = (
+                self._support_flags | ClimateEntityFeature.SWING_HORIZONTAL_MODE
+            )
+            self._current_horizontal_swing_mode = self._horizontal_swing_modes[0]
 
         self._temp_lock = asyncio.Lock()
         self._on_by_remote = False
@@ -183,8 +195,15 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         
         if last_state is not None:
             self._hvac_mode = last_state.state
+            if self._hvac_mode == STATE_ON:
+                self._hvac_mode = self._operation_modes[1]
             self._current_fan_mode = last_state.attributes['fan_mode']
             self._current_swing_mode = last_state.attributes.get('swing_mode')
+            restored_horizontal_swing = last_state.attributes.get(
+                'swing_horizontal_mode'
+            )
+            if restored_horizontal_swing in (self._horizontal_swing_modes or []):
+                self._current_horizontal_swing_mode = restored_horizontal_swing
             restored_temp = last_state.attributes.get('temperature')
             restored_unit = last_state.attributes.get('unit_of_measurement', '°C')
         
@@ -301,6 +320,16 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         return self._current_swing_mode
 
     @property
+    def swing_horizontal_modes(self):
+        """Return the horizontal swing modes supported by this device."""
+        return self._horizontal_swing_modes
+
+    @property
+    def swing_horizontal_mode(self):
+        """Return the current horizontal swing mode."""
+        return self._current_horizontal_swing_mode
+
+    @property
     def native_current_temperature(self):
         """Return the current temperature."""
         return self._current_temperature
@@ -400,6 +429,14 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                 await self.send_command()
         self.async_write_ha_state()
 
+    async def async_set_swing_horizontal_mode(self, swing_horizontal_mode):
+        """Set horizontal swing mode."""
+        self._current_horizontal_swing_mode = swing_horizontal_mode
+
+        if self._hvac_mode != HVACMode.OFF:
+            await self.generate_and_send_command()
+        self.async_write_ha_state()
+
     async def async_turn_off(self):
         """Turn off."""
         await self.async_set_hvac_mode(HVACMode.OFF)
@@ -421,13 +458,18 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                 _LOGGER.debug("Generating command with {}".format(self._generate_with))
                 if self._generate_with == "pyhvac":
                     from .generate_daikin_pyhvac import try_pyhvac_generate
+
                     generated_command = try_pyhvac_generate(
                         model=self._generate_device_model,
                         mode=self._hvac_mode,
                         temp=self._target_temperature,
                         fan=self._current_fan_mode,
-                        swing=None, # update later
-                        hswing=None,
+                        swing=None,
+                        hswing=(
+                            "swing"
+                            if self._current_horizontal_swing_mode == "on"
+                            else "off"
+                        ),
                         powerful=None
                     )
                     await self._controller.send(generated_command)
@@ -499,7 +541,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             if self._power_sensor_restore_state == True and self._last_on_operation is not None:
                 self._hvac_mode = self._last_on_operation
             else:
-                self._hvac_mode = STATE_ON
+                self._hvac_mode = self._operation_modes[1]
 
             self.async_write_ha_state()
 

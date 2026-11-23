@@ -41,6 +41,10 @@
       "Low",
       "Bottom"
    ],
+  "horizontalSwingModes": [
+      "off",
+      "on"
+   ],
   "powerfulModes": [
     "off",
     "on"
