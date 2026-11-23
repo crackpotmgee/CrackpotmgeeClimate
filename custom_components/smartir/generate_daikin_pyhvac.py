@@ -1,80 +1,116 @@
 #!/usr/bin/env python3
 """
-Generate Daikin codes using the `pyhvac` library (if installed) or fallback to
-`gcdaikin` CLI. This script is defensive because `pyhvac` is work-in-progress
-and plugin APIs can vary.
+Generate Daikin codes using the `pyhvac` library.
 
 Usage examples:
-  pip3 install pyhvac
-  python tools/generate_daikin_pyhvac.py --model generic --mode cool --temp 24 --fan auto --format broadlink
-
-The script will try these approaches in order:
- - Import `pyhvac` and find a `PluginObject` for a Daikin brand plugin,
-   instantiate it and call `get_device(...)` to obtain an HVAC object, then
-   call `to_broadlink()` / `to_lirs()` if available.
- - If library usage fails, try calling the `gcdaikin` CLI (if present).
-
-The outputs are printed to stdout. This file is a lightweight integration
-helper — adapt it into existing generation pipelines as needed.
+  python -m custom_components.smartir.generate_daikin_pyhvac --model generic --mode cool --temp 24 --fan auto
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib
-import shutil
-import subprocess
 import base64
-from pyhvac.plugins.daikin import PluginObject
-from typing import Optional
+
+from pyhvac import registry
+from pyhvac.ir.formats import to_broadlink, to_pronto, to_raw
+from pyhvac.state import HvacState
 
 
-def try_pyhvac_generate(model: str, mode: str, temp: Optional[float], fan: Optional[str], swing: Optional[str], hswing: Optional[str], powerful: Optional[bool]) -> Optional[str]:
-    """Try to generate codes using pyhvac as a library.
+def try_pyhvac_generate(
+    model: str,
+    mode: str,
+    temp: float | None,
+    fan: str | None,
+    swing: str | None,
+    hswing: str | None,
+    powerful: bool | None,
+    output_format: str = "broadlink",
+) -> str:
+    """Generate an IR command in Broadlink Base64, Pronto, or raw format."""
 
-    Returns the generated code string (e.g. Broadlink base64) or None if it
-    couldn't be generated.
-    """
+    device = registry.get_device("daikin", model)
+    mode = str(mode).lower()
+    power = mode != "off"
+    if not power:
+        mode = "cool"
 
-    device = PluginObject().get_device(model)
+    state = HvacState(
+        power=power,
+        mode=mode,
+        temperature=24.0 if temp is None else temp,
+        fan=fan or "auto",
+        swing_v=swing or "off",
+        swing_h=hswing or "off",
+        features={"powerful": powerful} if powerful is not None else {},
+    )
+    signal = device.encode(None, state).signal
 
-    frames = []
-    device.set_temperature(temp)
-    device.set_fan(fan)
-    device.set_swing(swing)
-    device.set_hswing(hswing)
-    device.set_powerful(powerful)
-    device.set_mode(mode)
-
-    frames = device.build_ircode()
-
-   
-    bframe = device.to_broadlink(frames)
-    print(f"broadlink={bframe}")
-    return "{}".format(str(base64.b64encode(bframe), "ascii"))
-    
+    if output_format == "broadlink":
+        return base64.b64encode(to_broadlink(signal)).decode("ascii")
+    if output_format == "pronto":
+        return to_pronto(signal)
+    if output_format == "raw":
+        return " ".join(str(pulse) for pulse in to_raw(signal))
+    raise ValueError(f"Unsupported output format: {output_format}")
 
 
+def _parse_bool(value: str) -> bool:
+    normalized = value.lower()
+    if normalized in ("true", "1", "yes", "on"):
+        return True
+    if normalized in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
 
-def main():
-    p = argparse.ArgumentParser(description="Generate Daikin codes with pyhvac (best-effort)")
-    p.add_argument("--model", default="generic", help="Device model name (plugin-specific)")
-    p.add_argument("--mode", default="cool", help="Operating mode: off, auto, cool, heat, dry, fan")
-    p.add_argument("--temp", type=float, default=None, help="Target temperature (if applicable)")
-    p.add_argument("--fan", default=None, help="Fan speed string (auto, low, medium, high, etc.)")
-    p.add_argument("--format", default="broadlink", choices=("broadlink", "lirs", "frames"), help="Desired output format")
-    p.add_argument("--swing", default=None, help="Swing mode (if applicable)")
-    p.add_argument("--hswing", default=None, help="Horizontal swing mode (if applicable)")
-    p.add_argument("--powerful", default=None, help="Powerful mode (if applicable)")
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Generate Daikin codes with pyhvac")
+    p.add_argument(
+        "--model", default="generic", help="Daikin model name supported by pyhvac"
+    )
+    p.add_argument(
+        "--mode",
+        default="cool",
+        help="Operating mode: off, auto, cool, heat, dry, fan",
+    )
+    p.add_argument("--temp", type=float, default=24.0, help="Target temperature in Celsius")
+    p.add_argument(
+        "--fan", default="auto", help="Fan setting supported by the selected pyhvac model"
+    )
+    p.add_argument(
+        "--format",
+        default="broadlink",
+        choices=("broadlink", "pronto", "raw"),
+        help="Output format",
+    )
+    p.add_argument(
+        "--swing", default=None, help="Vertical swing setting supported by the selected model"
+    )
+    p.add_argument(
+        "--hswing",
+        default=None,
+        help="Horizontal swing setting supported by the selected model",
+    )
+    p.add_argument(
+        "--powerful",
+        type=_parse_bool,
+        default=None,
+        help="Enable or disable powerful mode",
+    )
     args = p.parse_args()
 
-    # 1) Try library approach
-    print("Trying pyhvac library...")
-    lib_out = try_pyhvac_generate(args.model, args.mode, args.temp, args.fan, args.swing, args.hswing, args.powerful, args.format)
-    if lib_out:
-        print("Generated via pyhvac library:\n")
-        print(lib_out)
-        return
+    print(
+        try_pyhvac_generate(
+            args.model,
+            args.mode,
+            args.temp,
+            args.fan,
+            args.swing,
+            args.hswing,
+            args.powerful,
+            args.format,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -9,9 +9,9 @@
             "name": "Pyhvac Debug",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/tools/generate_daikin_pyhvac.py",
+            "program": "${workspaceFolder}/custom_components/smartir/generate_daikin_pyhvac.py",
             "console": "integratedTerminal",
-            "args": "--model 'ARC466A12 remote' --mode off --temp 22 --fan highest --swing auto --powerful false"
+            "args": "--model 'ARC466A12 remote' --mode off --temp 22 --fan highest --swing auto --hswing auto --powerful false"
         }
     ]
 }
