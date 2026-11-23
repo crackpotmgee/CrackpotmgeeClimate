@@ -2,13 +2,15 @@ import asyncio
 import aiofiles
 import json
 import logging
+import math
 import os.path
 
 import voluptuous as vol
 
 from homeassistant.components.climate import ClimateEntity, PLATFORM_SCHEMA
 from homeassistant.components.climate.const import (
-    ClimateEntityFeature, HVACMode, HVAC_MODES, ATTR_HVAC_MODE)
+    ClimateEntityFeature, HVACMode, HVAC_MODES, ATTR_HVAC_MODE,
+    ATTR_TARGET_TEMP_HIGH, ATTR_TARGET_TEMP_LOW)
 from homeassistant.const import (
     CONF_NAME, STATE_ON, STATE_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_TEMPERATURE,
     PRECISION_TENTHS, PRECISION_HALVES, PRECISION_WHOLE)
@@ -16,8 +18,12 @@ from homeassistant.core import Event, EventStateChangedData, callback
 from homeassistant.helpers.event import async_track_state_change_event
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.restore_state import RestoreEntity
-from . import COMPONENT_ABS_DIR, Helper
+from . import COMPONENT_ABS_DIR, DOMAIN, Helper
 from .controller import get_controller
+from .software_auto import (
+    COOL, HEAT, OFF, SoftwareAutoModeGroup, has_valid_temperature,
+    temperature_demand,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +40,8 @@ CONF_POWER_SENSOR = 'power_sensor'
 CONF_POWER_SENSOR_RESTORE_STATE = 'power_sensor_restore_state'
 CONF_GEN_DEVICE_MODEL = 'gen_device_model'
 CONF_ENABLE_SWING_MODE = 'enable_swing_mode'
+CONF_ENABLE_SOFTWARE_AUTO_RANGE = 'enable_software_auto_range'
+CONF_MODE_GROUP = 'mode_group'
 
 SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
@@ -54,6 +62,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_POWER_SENSOR_RESTORE_STATE, default=False): cv.boolean,
     vol.Optional(CONF_GEN_DEVICE_MODEL): cv.string,
     vol.Optional(CONF_ENABLE_SWING_MODE, default=False): cv.boolean,
+    vol.Optional(CONF_ENABLE_SOFTWARE_AUTO_RANGE, default=False): cv.boolean,
+    vol.Optional(CONF_MODE_GROUP): vol.All(cv.string, vol.Length(min=1)),
 })
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
@@ -96,9 +106,32 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         _LOGGER.error("The device JSON file is invalid")
         return
 
+    if config.get(CONF_ENABLE_SOFTWARE_AUTO_RANGE, False):
+        if not config.get(CONF_TEMPERATURE_SENSOR):
+            raise vol.Invalid(
+                "enable_software_auto_range requires temperature_sensor"
+            )
+        operation_modes = device_data.get('operationModes', [])
+        if not all(mode in operation_modes for mode in (HEAT, COOL)):
+            raise vol.Invalid(
+                "enable_software_auto_range requires heat and cool operation modes"
+            )
+    elif config.get(CONF_MODE_GROUP):
+        raise vol.Invalid("mode_group requires enable_software_auto_range")
+
     async_add_entities([SmartIRClimate(
         hass, config, device_data
     )])
+
+
+def _get_software_auto_group(hass, name):
+    groups = hass.data.setdefault(DOMAIN, {}).setdefault(
+        'software_auto_mode_groups', {}
+    )
+    if name not in groups:
+        groups[name] = SoftwareAutoModeGroup()
+    return groups[name]
+
 
 class SmartIRClimate(ClimateEntity, RestoreEntity):
     def __init__(self, hass, config, device_data):
@@ -114,6 +147,14 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._power_sensor = config.get(CONF_POWER_SENSOR)
         self._power_sensor_restore_state = config.get(CONF_POWER_SENSOR_RESTORE_STATE)
         self._enable_swing_mode = config.get(CONF_ENABLE_SWING_MODE, False)
+        self._enable_software_auto_range = config.get(
+            CONF_ENABLE_SOFTWARE_AUTO_RANGE, False
+        )
+        self._mode_group_name = config.get(CONF_MODE_GROUP)
+        if self._mode_group_name:
+            self._mode_group_name = self._mode_group_name.strip()
+            if not self._mode_group_name:
+                raise vol.Invalid("mode_group must not be empty")
 
         self._manufacturer = device_data['manufacturer']
         self._supported_models = device_data['supportedModels']
@@ -134,10 +175,18 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         if not max_temp and 'off' in self._mode_temperature_map:
             max_temp = self._mode_temperature_map['off'].get('max')
         self._max_temp = max_temp
+        self._software_auto_min_temp = min_temp if min_temp is not None else 7.0
+        self._software_auto_max_temp = max_temp if max_temp is not None else 35.0
         
         self._precision = device_data['precision']
 
         valid_hvac_modes = [x for x in device_data['operationModes'] if x in HVAC_MODES]
+        if self._enable_software_auto_range:
+            valid_hvac_modes = [
+                mode for mode in valid_hvac_modes if mode != HVACMode.AUTO
+            ]
+            if HVACMode.HEAT_COOL not in valid_hvac_modes:
+                valid_hvac_modes.append(HVACMode.HEAT_COOL)
 
         self._operation_modes = [HVACMode.OFF] + valid_hvac_modes
         self._fan_modes = device_data['fanModes']
@@ -155,7 +204,15 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._generate_device_model = config.get(CONF_GEN_DEVICE_MODEL) or self._supported_models[0]
 
         self._target_temperature = 21  # Default target temp
+        self._target_temperature_low = None
+        self._target_temperature_high = None
+        if self._enable_software_auto_range:
+            self._target_temperature_low, self._target_temperature_high = (
+                self._default_auto_temperature_range()
+            )
+        self._software_auto_sensor_error_logged = False
         self._hvac_mode = HVACMode.OFF
+        self._software_auto_active_mode = HVACMode.OFF
         self._current_fan_mode = self._fan_modes[0]
         self._current_swing_mode = None
         self._current_horizontal_swing_mode = None
@@ -166,6 +223,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         
         #Supported features
         self._support_flags = SUPPORT_FLAGS
+        if self._enable_software_auto_range:
+            self._support_flags = (
+                self._support_flags | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+            )
         self._support_swing = False
 
         if self._swing_modes:
@@ -189,6 +250,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._commands_encoding,
             self._controller_data,
             self._delay)
+        self._software_auto_group = (
+            _get_software_auto_group(self.hass, self._mode_group_name)
+            if self._enable_software_auto_range and self._mode_group_name
+            else None
+        )
     
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
@@ -211,15 +277,67 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             if restored_horizontal_swing in (self._horizontal_swing_modes or []):
                 self._current_horizontal_swing_mode = restored_horizontal_swing
             restored_temp = last_state.attributes.get('temperature')
-            restored_unit = last_state.attributes.get('unit_of_measurement', '°C')
+            restored_unit = last_state.attributes.get(
+                'temperature_unit',
+                last_state.attributes.get('unit_of_measurement', '°C')
+            ) or '°C'
         
             if restored_temp is not None:
-                if '°C' in restored_unit or restored_unit == 'C' and restored_temp > 45:
+                if '°F' in restored_unit or restored_unit == 'F':
                     restored_temp = convert_to_celsius(restored_temp)
                 self._target_temperature = restored_temp
 
             if 'last_on_operation' in last_state.attributes:
                 self._last_on_operation = last_state.attributes['last_on_operation']
+            if self._enable_software_auto_range:
+                if self._hvac_mode == HVACMode.AUTO:
+                    self._hvac_mode = HVACMode.HEAT_COOL
+                if self._last_on_operation == HVACMode.AUTO:
+                    self._last_on_operation = HVACMode.HEAT_COOL
+                restored_active_mode = last_state.attributes.get(
+                    'software_auto_active_mode'
+                )
+                if restored_active_mode in (OFF, HEAT, COOL):
+                    self._software_auto_active_mode = HVACMode(restored_active_mode)
+                elif last_state.state in (HVACMode.HEAT_COOL, HVACMode.AUTO):
+                    self._software_auto_active_mode = None
+                elif last_state.state in (HVACMode.HEAT, HVACMode.COOL):
+                    self._software_auto_active_mode = last_state.state
+                restored_low = last_state.attributes.get(ATTR_TARGET_TEMP_LOW)
+                restored_high = last_state.attributes.get(ATTR_TARGET_TEMP_HIGH)
+                if restored_low is not None and restored_high is not None:
+                    try:
+                        restored_low = float(restored_low)
+                        restored_high = float(restored_high)
+                        if '°F' in restored_unit or restored_unit == 'F':
+                            restored_low = convert_to_celsius(restored_low)
+                            restored_high = convert_to_celsius(restored_high)
+                    except (TypeError, ValueError):
+                        restored_low = None
+                    if restored_low is not None and self._is_valid_auto_range(
+                        restored_low, restored_high
+                    ):
+                        self._target_temperature_low = self._round_temperature(
+                            restored_low
+                        )
+                        self._target_temperature_high = self._round_temperature(
+                            restored_high
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Ignoring invalid restored temperature range for %s",
+                            self._name,
+                        )
+
+        if self._hvac_mode not in self._operation_modes:
+            _LOGGER.warning(
+                "Ignoring restored unsupported HVAC mode %s for %s",
+                self._hvac_mode,
+                self._name,
+            )
+            self._hvac_mode = HVACMode.OFF
+        if self._last_on_operation not in self._operation_modes:
+            self._last_on_operation = None
 
         if self._temperature_sensor:
             async_track_state_change_event(self.hass, self._temperature_sensor, 
@@ -240,6 +358,25 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         if self._power_sensor:
             async_track_state_change_event(self.hass, self._power_sensor, 
                                            self._async_power_sensor_changed)
+
+        if self._software_auto_group:
+            self._software_auto_group.add(self)
+        if (
+            self._enable_software_auto_range
+            and self._hvac_mode == HVACMode.HEAT_COOL
+        ):
+            await self._async_update_software_auto_mode(force=True)
+
+    async def async_will_remove_from_hass(self):
+        """Remove the entity from its software-auto group."""
+        if self._software_auto_group:
+            self._software_auto_group.remove(self)
+            if not self._software_auto_group.members:
+                groups = self.hass.data.get(DOMAIN, {}).get(
+                    'software_auto_mode_groups', {}
+                )
+                groups.pop(self._mode_group_name, None)
+        await super().async_will_remove_from_hass()
 
     @property
     def unique_id(self):
@@ -266,6 +403,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def min_temp(self):
         """Return the polling state."""
+        if (
+            self._enable_software_auto_range
+            and self._hvac_mode == HVACMode.HEAT_COOL
+        ):
+            return self._software_auto_min_temp
         if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
             mode_map = self._mode_temperature_map[self._hvac_mode]
             return mode_map['min']
@@ -274,6 +416,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def max_temp(self):
         """Return the polling state."""
+        if (
+            self._enable_software_auto_range
+            and self._hvac_mode == HVACMode.HEAT_COOL
+        ):
+            return self._software_auto_max_temp
         if(self._mode_temperature_map and self._hvac_mode in self._mode_temperature_map):
             mode_map = self._mode_temperature_map[self._hvac_mode]
             return mode_map['max']
@@ -283,6 +430,16 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     def native_target_temperature(self):
         """Return the temperature we try to reach."""
         return self._target_temperature
+
+    @property
+    def native_target_temperature_low(self):
+        """Return the lower bound for software-controlled auto mode."""
+        return self._target_temperature_low
+
+    @property
+    def native_target_temperature_high(self):
+        """Return the upper bound for software-controlled auto mode."""
+        return self._target_temperature_high
 
     @property
     def target_temperature_step(self):
@@ -353,18 +510,72 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def extra_state_attributes(self):
         """Platform specific attributes."""
-        return {
+        attributes = {
             'last_on_operation': self._last_on_operation,
             'device_code': self._device_code,
             'manufacturer': self._manufacturer,
             'supported_models': self._supported_models,
             'supported_controller': self._supported_controller,
-            'commands_encoding': self._commands_encoding
+            'commands_encoding': self._commands_encoding,
         }
+        if self._enable_software_auto_range:
+            attributes['software_auto_active_mode'] = (
+                self._software_auto_active_mode
+            )
+        return attributes
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperatures."""
-        hvac_mode = kwargs.get(ATTR_HVAC_MODE)  
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE)
+        target_temp_low = kwargs.get(ATTR_TARGET_TEMP_LOW)
+        target_temp_high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
+
+        if self._enable_software_auto_range and (
+            target_temp_low is not None or target_temp_high is not None
+        ):
+            try:
+                new_low = (
+                    self._target_temperature_low
+                    if target_temp_low is None
+                    else float(target_temp_low)
+                )
+                new_high = (
+                    self._target_temperature_high
+                    if target_temp_high is None
+                    else float(target_temp_high)
+                )
+            except (TypeError, ValueError):
+                _LOGGER.error("Invalid target temperature range for %s", self._name)
+                return
+
+            if not self._is_valid_auto_range(new_low, new_high):
+                _LOGGER.warning(
+                    "Invalid target temperature range for %s: %s to %s",
+                    self._name,
+                    new_low,
+                    new_high,
+                )
+                return
+
+            new_low = self._round_temperature(new_low)
+            new_high = self._round_temperature(new_high)
+            if new_low >= new_high:
+                _LOGGER.warning(
+                    "Rounded target temperature range is invalid for %s",
+                    self._name,
+                )
+                return
+            self._target_temperature_low = new_low
+            self._target_temperature_high = new_high
+
+            if hvac_mode is not None:
+                await self.async_set_hvac_mode(hvac_mode)
+            elif self._hvac_mode == HVACMode.HEAT_COOL:
+                await self._async_update_software_auto_mode(force=True)
+            else:
+                self.async_write_ha_state()
+            return
+
         temperature = kwargs.get(ATTR_TEMPERATURE)
           
         if temperature is None:
@@ -380,10 +591,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             _LOGGER.warning('The temperature value is out of min/max range') 
             return
 
-        if self._precision == PRECISION_WHOLE:
-            self._target_temperature = round(temperature_c)
-        else:
-            self._target_temperature = round(temperature_c, 1)
+        self._target_temperature = self._round_temperature(temperature_c)
 
         if hvac_mode:
             await self.async_set_hvac_mode(hvac_mode)
@@ -399,18 +607,43 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
 
     async def async_set_hvac_mode(self, hvac_mode):
         """Set operation mode."""
+        previous_mode = self._hvac_mode
+        was_software_auto = previous_mode == HVACMode.HEAT_COOL
+
+        if self._enable_software_auto_range and hvac_mode == HVACMode.HEAT_COOL:
+            self._hvac_mode = hvac_mode
+            self._last_on_operation = hvac_mode
+            self._min_temp = self.min_temp
+            self._max_temp = self.max_temp
+            await self._async_update_software_auto_mode(force=True)
+            self.async_write_ha_state()
+            return
+
+        if was_software_auto:
+            await self._async_apply_software_mode(OFF, raise_on_error=True)
+
         self._hvac_mode = hvac_mode
         
         if not hvac_mode == HVACMode.OFF:
             self._last_on_operation = hvac_mode
 
+        if was_software_auto and hvac_mode in (HVACMode.HEAT, HVACMode.COOL):
+            self._target_temperature = (
+                self._target_temperature_low
+                if hvac_mode == HVACMode.HEAT
+                else self._target_temperature_high
+            )
+
         self._min_temp = self.min_temp
         self._max_temp = self.max_temp
 
-        if self._generate:
-            await self.generate_and_send_command()
+        if was_software_auto:
+            if self._software_auto_group:
+                await self._software_auto_group.async_update()
+            if hvac_mode != HVACMode.OFF:
+                await self._send_current_command(raise_on_error=True)
         else:
-            await self.send_command()
+            await self._send_current_command()
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode):
@@ -451,10 +684,128 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         """Turn on."""
         if self._last_on_operation is not None:
             await self.async_set_hvac_mode(self._last_on_operation)
+        elif self._enable_software_auto_range:
+            await self.async_set_hvac_mode(HVACMode.HEAT_COOL)
         else:
             await self.async_set_hvac_mode(self._operation_modes[1])
 
-    async def generate_and_send_command(self):
+    async def _send_current_command(self, raise_on_error=False):
+        if self._generate:
+            await self.generate_and_send_command(raise_on_error=raise_on_error)
+        else:
+            await self.send_command(raise_on_error=raise_on_error)
+
+    def _command_hvac_mode(self):
+        if self._hvac_mode == HVACMode.HEAT_COOL:
+            return self._software_auto_active_mode
+        return self._hvac_mode
+
+    async def _async_apply_software_mode(
+        self, mode, force=False, raise_on_error=False
+    ):
+        if mode not in (OFF, HEAT, COOL):
+            raise ValueError(f"Unsupported software-auto mode: {mode}")
+
+        if mode == HEAT:
+            self._target_temperature = self._target_temperature_low
+        elif mode == COOL:
+            self._target_temperature = self._target_temperature_high
+
+        if mode == self._software_auto_active_mode and not force:
+            return
+
+        previous_mode = self._software_auto_active_mode
+        self._software_auto_active_mode = HVACMode(mode)
+        try:
+            await self._send_current_command(raise_on_error=raise_on_error)
+        except Exception:
+            self._software_auto_active_mode = previous_mode
+            raise
+        self.async_write_ha_state()
+
+    async def _async_update_software_auto_mode(self, force=False):
+        if not has_valid_temperature(self._current_temperature):
+            if not self._software_auto_sensor_error_logged:
+                _LOGGER.warning(
+                    "Software auto mode for %s is inactive because its "
+                    "temperature sensor has no valid reading",
+                    self._name,
+                )
+                self._software_auto_sensor_error_logged = True
+            if self._software_auto_group:
+                await self._software_auto_group.async_update()
+            else:
+                await self._async_apply_software_mode(
+                    OFF, raise_on_error=True
+                )
+            return
+
+        self._software_auto_sensor_error_logged = False
+        if self._software_auto_group:
+            await self._software_auto_group.async_update(
+                force_entity=self if force else None
+            )
+            return
+
+        demand = temperature_demand(
+            self._current_temperature,
+            self._target_temperature_low,
+            self._target_temperature_high,
+        )
+        selected_mode = (
+            demand[0]
+            if demand is not None
+            else self._software_auto_active_mode
+        )
+        if selected_mode not in (HEAT, COOL):
+            selected_mode = OFF
+        await self._async_apply_software_mode(
+            selected_mode, force=force, raise_on_error=True
+        )
+
+    def _temperature_bounds(self, mode):
+        mode_bounds = self._mode_temperature_map.get(str(mode), {})
+        minimum = mode_bounds.get('min')
+        maximum = mode_bounds.get('max')
+        if minimum is None:
+            minimum = self._software_auto_min_temp
+        if maximum is None:
+            maximum = self._software_auto_max_temp
+        return float(minimum), float(maximum)
+
+    def _round_temperature(self, temperature):
+        if self._precision == PRECISION_WHOLE:
+            return float(round(temperature))
+        return round(temperature, 1)
+
+    def _default_auto_temperature_range(self):
+        heat_min, heat_max = self._temperature_bounds(HVACMode.HEAT)
+        cool_min, cool_max = self._temperature_bounds(HVACMode.COOL)
+        low = self._round_temperature(min(max(20.0, heat_min), heat_max))
+        high = self._round_temperature(min(max(22.0, cool_min), cool_max))
+
+        if low >= high:
+            low = self._round_temperature(heat_min)
+            high = self._round_temperature(cool_max)
+        if low >= high or low < heat_min or low > heat_max or high < cool_min or high > cool_max:
+            raise vol.Invalid(
+                "enable_software_auto_range requires a valid heat/cool temperature range"
+            )
+        return low, high
+
+    def _is_valid_auto_range(self, low, high):
+        try:
+            low = float(low)
+            high = float(high)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(low) or not math.isfinite(high) or low >= high:
+            return False
+        heat_min, heat_max = self._temperature_bounds(HVACMode.HEAT)
+        cool_min, cool_max = self._temperature_bounds(HVACMode.COOL)
+        return heat_min <= low <= heat_max and cool_min <= high <= cool_max
+
+    async def generate_and_send_command(self, raise_on_error=False):
         async with self._temp_lock:
             try:
                 self._on_by_remote = False
@@ -467,7 +818,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
 
                     generated_command = try_pyhvac_generate(
                         model=self._generate_device_model,
-                        mode=self._hvac_mode,
+                        mode=self._command_hvac_mode(),
                         temp=self._target_temperature,
                         fan=self._current_fan_mode,
                         swing=(
@@ -483,13 +834,16 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                         powerful=None
                     )
                     await self._controller.send(generated_command)
-            except Exception as e:
-                _LOGGER.exception(e)
-    async def send_command(self):
+            except Exception:
+                _LOGGER.exception("Failed to generate or send climate command")
+                if raise_on_error:
+                    raise
+
+    async def send_command(self, raise_on_error=False):
         async with self._temp_lock:
             try:
                 self._on_by_remote = False
-                operation_mode = self._hvac_mode
+                operation_mode = self._command_hvac_mode()
                 fan_mode = self._current_fan_mode
                 swing_mode = self._current_swing_mode
                 target_temperature = '{0:g}'.format(self._target_temperature)
@@ -509,8 +863,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                     await self._controller.send(
                         self._commands[operation_mode][fan_mode][target_temperature])
 
-            except Exception as e:
-                _LOGGER.exception(e)
+            except Exception:
+                _LOGGER.exception("Failed to send climate command")
+                if raise_on_error:
+                    raise
                 
     @callback
     async def _async_temp_sensor_changed(self, event: Event[EventStateChangedData]) -> None:
@@ -521,6 +877,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             return
 
         self._async_update_temp(new_state)
+        if (
+            self._enable_software_auto_range
+            and self._hvac_mode == HVACMode.HEAT_COOL
+        ):
+            await self._async_update_software_auto_mode()
         self.async_write_ha_state()
 
     @callback
@@ -553,28 +914,45 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             else:
                 self._hvac_mode = self._operation_modes[1]
 
+            if self._hvac_mode == HVACMode.HEAT_COOL:
+                await self._async_update_software_auto_mode()
             self.async_write_ha_state()
 
         if new_state.state == STATE_OFF:
             self._on_by_remote = False
+            if (
+                self._enable_software_auto_range
+                and self._hvac_mode == HVACMode.HEAT_COOL
+                and self._software_auto_active_mode == HVACMode.OFF
+            ):
+                self.async_write_ha_state()
+                return
             if self._hvac_mode != HVACMode.OFF:
+                was_software_auto = self._hvac_mode == HVACMode.HEAT_COOL
                 self._hvac_mode = HVACMode.OFF
+                if was_software_auto:
+                    self._software_auto_active_mode = HVACMode.OFF
+                    if self._software_auto_group:
+                        await self._software_auto_group.async_update()
             self.async_write_ha_state()
 
     @callback
     def _async_update_temp(self, state):
         """Update thermostat with latest state from temperature sensor."""
         try:
-            if state.state != STATE_UNKNOWN and state.state != STATE_UNAVAILABLE:
-                temp = float(state.state)
-                # Check sensor's unit of measurement and convert to Celsius if needed
-                sensor_unit = state.attributes.get('unit_of_measurement', '°C')
-                if '°F' in sensor_unit or sensor_unit == 'F':
-                    # Convert Fahrenheit to Celsius
-                    temp = convert_to_celsius(temp)
-                self._current_temperature = temp
-        except ValueError as ex:
+            if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+                if self._enable_software_auto_range:
+                    self._current_temperature = None
+                return
+            temp = float(state.state)
+            sensor_unit = state.attributes.get('unit_of_measurement', '°C')
+            if '°F' in sensor_unit or sensor_unit == 'F':
+                temp = convert_to_celsius(temp)
+            self._current_temperature = temp
+        except (TypeError, ValueError) as ex:
             _LOGGER.error("Unable to update from temperature sensor: %s", ex)
+            if self._enable_software_auto_range:
+                self._current_temperature = None
 
     @callback
     def _async_update_humidity(self, state):

@@ -13,6 +13,7 @@
     "files": [
       "__init__.py",
       "climate.py",
+      "software_auto.py",
       "generate_daikin_pyhvac.py",
       "media_player.py",
       "fan.py",

@@ -19,8 +19,25 @@ _Please note that the device_code field only accepts positive numbers. The .json
 | `power_sensor` | string | optional | *entity_id* for a sensor that monitors whether your device is actually `on` or `off`. This may be a power monitor sensor. (Accepts only on/off states) |
 | `power_sensor_restore_state` | boolean | optional | If `power_sensor` is set, and the device is likely to turn off and back on while still in the set mode (for instance, a minisplit cycling on and off while in heating or cooling mode), setting this to `true` will cause the climate state to update dynamically, following the state of the `power_sensor`. |
 | `enable_swing_mode` | boolean | `false` | For `pyhvac`-generated devices, expose vertical swing as an `off`/`on` control. |
+| `enable_software_auto_range` | boolean | `false` | Add Home Assistant's `Heat/Cool` range control. Requires a `temperature_sensor`; the integration selects explicit heat/cool IR modes using the low/high range, rather than the device's native Auto mode. The initial range is 20–22 °C, subject to the device's supported range. |
+| `mode_group` | string | optional | Put the same name on software-auto climate entries to coordinate them. The strongest out-of-range temperature demand selects the group's mode; opposing-demand units are turned off, and only matching-demand units run. This logical group applies only to software-auto demands; it does not create a Home Assistant group entity. |
 
 Generated Daikin devices using `pyhvac` can define a separate `horizontalSwingModes` list in their device JSON. This exposes Home Assistant's horizontal swing control independently of `enable_swing_mode`.
+
+### Software-managed Heat/Cool
+
+```yaml
+climate:
+  - platform: smartir
+    name: Office AC
+    device_code: "1118gen"
+    controller_data: remote.office_ir
+    temperature_sensor: sensor.office_temperature
+    enable_software_auto_range: true
+    mode_group: main_floor
+```
+
+In the `Heat/Cool` range mode, the integration selects HEAT at or below the low target and COOL at or above the high target. Between the targets it holds the previous mode; with no previous mode it stays off. Grouped units resolve competing automatic demands by comparing how far each reading is beyond its threshold; a tie retains the current group mode.
 
 ## Example (using broadlink controller):
 Add a Broadlink RM device named "Bedroom" via config flow (read the [docs](https://www.home-assistant.io/integrations/broadlink/)).
