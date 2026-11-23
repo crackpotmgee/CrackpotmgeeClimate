@@ -33,13 +33,13 @@ CONF_HUMIDITY_SENSOR = 'humidity_sensor'
 CONF_POWER_SENSOR = 'power_sensor'
 CONF_POWER_SENSOR_RESTORE_STATE = 'power_sensor_restore_state'
 CONF_GEN_DEVICE_MODEL = 'gen_device_model'
+CONF_ENABLE_SWING_MODE = 'enable_swing_mode'
 
 SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
     ClimateEntityFeature.TURN_ON |
     ClimateEntityFeature.TARGET_TEMPERATURE | 
-    ClimateEntityFeature.FAN_MODE | 
-    ClimateEntityFeature.SWING_MODE
+    ClimateEntityFeature.FAN_MODE
 )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -52,7 +52,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_HUMIDITY_SENSOR): cv.entity_id,
     vol.Optional(CONF_POWER_SENSOR): cv.entity_id,
     vol.Optional(CONF_POWER_SENSOR_RESTORE_STATE, default=False): cv.boolean,
-    vol.Optional(CONF_GEN_DEVICE_MODEL): cv.string
+    vol.Optional(CONF_GEN_DEVICE_MODEL): cv.string,
+    vol.Optional(CONF_ENABLE_SWING_MODE, default=False): cv.boolean,
 })
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
@@ -112,6 +113,7 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._humidity_sensor = config.get(CONF_HUMIDITY_SENSOR)
         self._power_sensor = config.get(CONF_POWER_SENSOR)
         self._power_sensor_restore_state = config.get(CONF_POWER_SENSOR_RESTORE_STATE)
+        self._enable_swing_mode = config.get(CONF_ENABLE_SWING_MODE, False)
 
         self._manufacturer = device_data['manufacturer']
         self._supported_models = device_data['supportedModels']
@@ -140,6 +142,8 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._operation_modes = [HVACMode.OFF] + valid_hvac_modes
         self._fan_modes = device_data['fanModes']
         self._swing_modes = device_data.get('swingModes')
+        if device_data.get('commands', {}).get('generateWith') == 'pyhvac':
+            self._swing_modes = ['off', 'on'] if self._enable_swing_mode else None
         self._horizontal_swing_modes = (
             device_data.get('horizontalSwingModes')
             if device_data.get('commands', {}).get('generateWith') == 'pyhvac'
@@ -198,7 +202,9 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             if self._hvac_mode == STATE_ON:
                 self._hvac_mode = self._operation_modes[1]
             self._current_fan_mode = last_state.attributes['fan_mode']
-            self._current_swing_mode = last_state.attributes.get('swing_mode')
+            restored_swing_mode = last_state.attributes.get('swing_mode')
+            if restored_swing_mode in (self._swing_modes or []):
+                self._current_swing_mode = restored_swing_mode
             restored_horizontal_swing = last_state.attributes.get(
                 'swing_horizontal_mode'
             )
@@ -464,7 +470,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                         mode=self._hvac_mode,
                         temp=self._target_temperature,
                         fan=self._current_fan_mode,
-                        swing=None,
+                        swing=(
+                            "swing"
+                            if self._current_swing_mode == "on"
+                            else "off"
+                        ),
                         hswing=(
                             "swing"
                             if self._current_horizontal_swing_mode == "on"

@@ -18,8 +18,9 @@ _Please note that the device_code field only accepts positive numbers. The .json
 | `humidity_sensor` | string | optional | *entity_id* for a humidity sensor |
 | `power_sensor` | string | optional | *entity_id* for a sensor that monitors whether your device is actually `on` or `off`. This may be a power monitor sensor. (Accepts only on/off states) |
 | `power_sensor_restore_state` | boolean | optional | If `power_sensor` is set, and the device is likely to turn off and back on while still in the set mode (for instance, a minisplit cycling on and off while in heating or cooling mode), setting this to `true` will cause the climate state to update dynamically, following the state of the `power_sensor`. |
+| `enable_swing_mode` | boolean | `false` | For `pyhvac`-generated devices, expose vertical swing as an `off`/`on` control. |
 
-Generated Daikin devices using `pyhvac` can define a separate `horizontalSwingModes` list in their device JSON. This exposes Home Assistant's horizontal swing control independently of the vertical `swingModes` control.
+Generated Daikin devices using `pyhvac` can define a separate `horizontalSwingModes` list in their device JSON. This exposes Home Assistant's horizontal swing control independently of `enable_swing_mode`.
 
 ## Example (using broadlink controller):
 Add a Broadlink RM device named "Bedroom" via config flow (read the [docs](https://www.home-assistant.io/integrations/broadlink/)).

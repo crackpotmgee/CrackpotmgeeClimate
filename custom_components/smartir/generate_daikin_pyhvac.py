@@ -29,8 +29,14 @@ def try_pyhvac_generate(
     """Generate an IR command in Broadlink Base64, Pronto, or raw format."""
 
     device = registry.get_device("daikin", model)
-    if hswing not in (None, "off") and device.capabilities.swing_h is None:
-        raise ValueError(f"Daikin model {model!r} does not support horizontal swing")
+    if swing not in (None, "off"):
+        vertical_modes = device.capabilities.swing_v
+        if vertical_modes is None or swing not in vertical_modes.values:
+            raise ValueError(f"Daikin model {model!r} does not support vertical swing")
+    if hswing not in (None, "off"):
+        horizontal_modes = device.capabilities.swing_h
+        if horizontal_modes is None or hswing not in horizontal_modes.values:
+            raise ValueError(f"Daikin model {model!r} does not support horizontal swing")
 
     mode = str(mode).lower()
     power = mode != "off"

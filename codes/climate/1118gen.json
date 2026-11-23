@@ -33,14 +33,6 @@
     "4",
     "5"
   ],
-  "swingModes":[
-      "auto",
-      "Top",
-      "High",
-      "Medium",
-      "Low",
-      "Bottom"
-   ],
   "horizontalSwingModes": [
       "off",
       "on"
